@@ -1,0 +1,233 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>XSockets.NET WebRTC API - A fuzzy example</title>
+
+
+    <link href="http://netdna.bootstrapcdn.com/twitter-bootstrap/2.3.0/css/bootstrap-combined.min.css" rel="stylesheet" />
+    <script src="http://xsockets.net/js/Adapter.js"></script>
+    <script src="http://code.jquery.com/jquery-1.9.1.min.js"></script>
+    <script src="http://xsockets.net/js/jXSockets.2.2.min.js"></script>
+    <script src="http://xsockets.net/js/XSockets.WebRTC.1.0.2.min.js"></script>
+    <script src="http://netdna.bootstrapcdn.com/twitter-bootstrap/2.3.0/js/bootstrap.min.js"></script>
+
+    <script src="js/misc.js"></script>
+
+    <script>
+        
+
+
+        // http://xsockets.net/api for more info
+
+        var webRTC, callManager, peerBroker;
+        var you = {
+            ScreenName: getName(5, 8), // Just generate a random string, it may look like a name?  We did jus google .-)
+            StorageGuid: null,
+            Context: null
+        };
+        $(function () {
+
+            $("#screenName").val(you.ScreenName);
+
+            //  ws://127.0.0.1:10101/PeerBroker
+            peerBroker = new XSockets.WebSocket("ws://peerbroker.cloudapp.net:10101/PeerBroker", "PeerBroker");
+
+            webRTC = new XSockets.WebRTC(peerBroker,
+                {
+                    dataChannels: false,
+                    iceServers: {
+                        "iceServers": [{
+                            "url": "stun:stun.l.google.com:19302"
+                        }]
+                    }
+                });
+
+            webRTC.bind(XSockets.WebRTC.Events.onContextCreated, function (peerContext) {
+                log("PeerContext created:", peerContext.Context);
+                you.Context = peerContext.Context;
+            });
+
+            webRTC.bind(XSockets.WebRTC.Events.onContextChange, function (arrPeerContext) {
+                log("Your PeerBrokerContext changed:", arrPeerContext.length);
+            });
+
+
+            webRTC.bind(XSockets.WebRTC.Events.onPeerConnectionCreated, function (peerContext) {
+                log("A peer connection is created", peerContext);
+            });
+
+
+            webRTC.bind(XSockets.WebRTC.Events.onlocalStream, function (stream) {
+                attachMediaStream(document.querySelector("#localVideo"), stream);
+            });
+
+
+            webRTC.bind(XSockets.WebRTC.Events.onRemoteStream, function (event) {
+
+        
+                var remoteVideo = $("<video>").addClass("remote-video").attr({
+                    width: "212",
+                    height: "120",
+                    autoplay: "autoplay",
+                    controls: "controls",
+                    rel: event.StorageGuid
+                });
+                attachMediaStream(remoteVideo.get(0), event.MediaStreamEvent.stream);
+                $("#talk").append(remoteVideo); // Append the video to DOM
+            });
+
+
+            webRTC.bind(XSockets.WebRTC.Events.onPeerConnectionLost, function (peerContext) {
+                // lazy we are..
+                $("[rel='" + peerContext.StorageGuid + "']").remove();
+            });
+
+            peerBroker.subscribe(XSockets.Events.open, function (conn) {
+
+                webRTC.ready(you.ScreenName);
+
+                callManager = new XSockets.WebRTC.CallManager(peerBroker, {
+                    events: {
+                        onCall: function (call) {
+                            var q = call;
+                            log("You got a call!");
+                            $("#oncall").modal("show");
+                            $("#oncall").data("call", call);
+                            $("#oncall h2 span").text(call.ScreenName);
+                        },
+                        onAcceptCall: function (peerContext) {
+                            log("You accepted a call...");
+                            webRTC.changeContext(peerContext.Context);
+                            $("#oncall").modal("hide");
+                        },
+                        onDenyCall: function (peerContext) {
+                            log("Your call was denied! Why don't you buy a lollipop!", peerContext);
+                        }
+                    }
+                });
+                // this is your identifier
+                you.StorageGuid = conn.StorageGuid;
+            });
+
+            $("#start").on("click", function (evt) {
+                evt.preventDefault();
+                webRTC.getUserMedia({
+                        audio: true,
+                        video: true
+                    }, function () {
+                        $("#join").fadeOut(function () {
+                            $("#talk h1 small").text(you.ScreenName);
+                            $("#talk").fadeIn();
+                        });
+                        you.ScreenName = $("#screenName").val(); // this will be you .-)
+                    
+                        // Someone connects to the PeerBrooker, lets ad this other fella...
+                        peerBroker.subscribe("PeerContextCreated", function (other) {
+                            addOnliner(other);
+                        });
+                        // A Peer disconnects from the PeerBroker
+                        peerBroker.subscribe("PeerContextDestroyed", function (peerContext) {
+                            $("[rel='" + peerContext.StorageGuid + "']").remove(); // Remove the peer we lost!
+                        });
+                        peerBroker.subscribe("BrokerPeers", function (arrPeerContext) {
+                            arrPeerContext.forEach(function (peerContext) {
+                                addOnliner(peerContext);
+                            });
+                        });
+                        // Ask who is here...
+                        peerBroker.publish("PeersOnBroker", {});
+
+                    });
+                // Accept a call
+                $("#acceptCall").on("click", function () {
+                    var call = $("#oncall").data().call;
+                    callManager.acceptCall(call);
+                });
+                // Deny a call
+                $("#denyCall").on("click", function () {
+                    var call = $("#oncall").data().call;
+                    callManager.denyCall(call);
+                });
+            });
+        });
+
+        // Just adds the PeerContect to a ul
+        function addOnliner(other) {
+            if (other.StorageGuid == you.StorageGuid) return;
+
+            $("<li><a></a></li>").attr({ rel: other.StorageGuid }).find("a").text(other.ScreenName).data(other).on("click", {
+                    Client: other
+                }, function (evt) {
+                    callManager.call(evt.data.Client, you);
+                }).end().prependTo("#onliners");
+        }
+
+    </script>
+
+    <style>
+        .local-video {
+            right: 10px;
+            top: 10px;
+            position: absolute;
+            width: 120px;
+            height: 68px;
+        }
+    </style>
+
+</head>
+
+<body>
+    <video id="localVideo" class="local-video img-polaroid" width="120" height="68" autoplay>
+    </video>
+    <div class="modal hide fade" id="oncall">
+        <div class="modal-header">
+            <button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>
+            <h2><span></span>is calling..</h2>
+        </div>
+        <div class="modal-body">
+            <p>...</p>
+        </div>
+        <div class="modal-footer">
+            <a href="#" class="btn" data-dismiss="modal" aria-hidden="true" id="denyCall">Deny</a>
+            <a href="#" class="btn btn-primary" id="acceptCall">Accept</a>
+        </div>
+    </div>
+    <div class="container">
+        <div class="row">
+            <div class="span3" style="padding-top: 40px">
+                <strong>Onliners</strong>
+                <ul class="nav nav-list" id="onliners">
+                </ul>
+            </div>
+            <div class="span9">
+                <h1 class="page-header">XSockets WebRTC</h1>
+                <div id="join">
+                    <form>
+                        <div class="controls">
+                            <div class="control-group">
+                                <label class="control-label" for="screenName">Screen name:</label>
+                                <input type="text" id="screenName" class="input-large" placeholder="Choose a screenname" value="Helo" />
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button id="start" class="btn btn-success">JOIN & START CAM</button>
+
+                        </div>
+                    </form>
+                </div>
+                <div id="talk" style="display: none">
+                    <h1>Conversation&nbsp;<small></small></h1>
+                </div>
+
+            </div>
+
+        </div>
+        <hr />
+        <div class="row">
+            <div class="span9 offset3">
+                <div id="log"></div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
